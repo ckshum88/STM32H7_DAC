@@ -1,9 +1,10 @@
 #include "lcd.h"
 #include "font.h"
-#include "spi.h"
-#include "tim.h"
 
 #include "board.h"
+
+extern SPI_HandleTypeDef hspi4;
+extern TIM_HandleTypeDef htim1;
 
 //SPI��ʾ���ӿ�
 //LCD_RST
@@ -45,69 +46,19 @@ ST7735_IO_t st7735_pIO = {
 ST7735_Object_t st7735_pObj;
 uint32_t st7735_id;
 
-void LCD_Test(void)
+void LCD_Init(void)
 {
-	uint8_t text[20];
-	
-	#ifdef TFT96
 	ST7735Ctx.Orientation = ST7735_ORIENTATION_LANDSCAPE_ROT180;
 	ST7735Ctx.Panel = HannStar_Panel;
 	ST7735Ctx.Type = ST7735_0_9_inch_screen;
-	#elif TFT18
-	ST7735Ctx.Orientation = ST7735_ORIENTATION_PORTRAIT;
-	ST7735Ctx.Panel = BOE_Panel;
-	ST7735Ctx.Type = ST7735_1_8a_inch_screen;
-	#else
-	error "Unknown Screen"
-	
-	#endif
-	
+
 	ST7735_RegisterBusIO(&st7735_pObj,&st7735_pIO);
 	ST7735_LCD_Driver.Init(&st7735_pObj,ST7735_FORMAT_RBG565,&ST7735Ctx);
 	ST7735_LCD_Driver.ReadID(&st7735_pObj,&st7735_id);
-	
-	LCD_SetBrightness(0);
-	
-	#ifdef TFT96
-	extern unsigned char WeActStudiologo_160_80[];
-	ST7735_LCD_Driver.DrawBitmap(&st7735_pObj,0,0,WeActStudiologo_160_80);
-	#elif TFT18
-	extern unsigned char WeActStudiologo_128_160[];
-	ST7735_LCD_Driver.DrawBitmap(&st7735_pObj,0,0,WeActStudiologo_128_160);	
-	#endif
-	
-  uint32_t tick = get_tick();
-	while (HAL_GPIO_ReadPin(KEY_GPIO_Port, KEY_Pin) != GPIO_PIN_SET)
-	{
-		delay_ms(10);
 
-		if (get_tick() - tick <= 1000)
-			LCD_SetBrightness((get_tick() - tick) * 100 / 1000);
-		else if (get_tick() - tick <= 3000)
-		{
-			sprintf((char *)&text, "%03ld", (get_tick() - tick - 1000) / 10);
-			LCD_ShowString(ST7735Ctx.Width - 30, 1, ST7735Ctx.Width, 16, 16, text);
-			ST7735_LCD_Driver.FillRect(&st7735_pObj, 0, ST7735Ctx.Height - 3, (get_tick() - tick - 1000) * ST7735Ctx.Width / 2000, 3, 0xFFFF);
-		}
-		else if (get_tick() - tick > 3000)
-			break;
-	}
-	while (HAL_GPIO_ReadPin(KEY_GPIO_Port, KEY_Pin) == GPIO_PIN_SET)
-	{
-		delay_ms(10);
-	}
-	LCD_Light(0, 300);
+	LCD_SetBrightness(80);
 
 	ST7735_LCD_Driver.FillRect(&st7735_pObj, 0, 0, ST7735Ctx.Width,ST7735Ctx.Height, BLACK);
-
-	sprintf((char *)&text, "WeAct Studio");
-	LCD_ShowString(4, 4, ST7735Ctx.Width, 16, 16, text);
-	sprintf((char *)&text, "STM32H7xx 0x%lX", HAL_GetDEVID());
-	LCD_ShowString(4, 22, ST7735Ctx.Width, 16, 16, text);
-	sprintf((char *)&text, "LCD ID:0x%lX", st7735_id);
-	LCD_ShowString(4, 40, ST7735Ctx.Width, 16, 16, text);
-
-	LCD_Light(100, 200);
 }
 
 void LCD_SetBrightness(uint32_t Brightness)
