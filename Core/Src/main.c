@@ -24,6 +24,7 @@
 /* USER CODE BEGIN Includes */
 #include "board.h"
 #include "lcd.h"
+#include "usbd_audio.h"
 #include <stdio.h>
 /* USER CODE END Includes */
 
@@ -117,8 +118,8 @@ int main(void)
   board_led_init();
   LCD_Init();
 
-  LCD_ShowString(4, 4, 152, 16, 16, (uint8_t *)"STM32H7 USB DAC");
-  LCD_ShowString(4, 30, 152, 16, 16, (uint8_t *)"USB: -");
+  LCD_ShowString(4, 2, 152, 16, 16, (uint8_t *)"STM32H7 USB DAC");
+  LCD_ShowString(4, 26, 152, 16, 16, (uint8_t *)"USB: -");
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -143,10 +144,25 @@ int main(void)
         case USBD_STATE_DEFAULT:    sprintf((char *)text, "USB: Connected "); break;
         default:                    sprintf((char *)text, "USB: Unknown   "); break;
       }
-      LCD_ShowString(4, 30, 152, 16, 16, text);
+      LCD_ShowString(4, 26, 152, 16, 16, text);
     }
 
+#ifdef AUDIO_DEBUG
+    {
+      char dbg[24];
+
+      sprintf(dbg, "R:%-5lu F:%-4lu   ", (unsigned long)audio_dbg_freq,
+              (unsigned long)audio_dbg_writable_samples);
+      LCD_ShowString(4, 42, 152, 16, 16, (uint8_t *)dbg);
+
+      sprintf(dbg, "Drop:%-6lu   ", (unsigned long)audio_dbg_drop_count);
+      LCD_ShowString(4, 58, 152, 16, 16, (uint8_t *)dbg);
+
+      board_led_set(audio_dbg_danger ? 1U : 0U);
+    }
+#else
     board_led_toggle();
+#endif
     HAL_Delay(200);
   }
   /* USER CODE END 3 */

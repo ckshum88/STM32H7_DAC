@@ -45,8 +45,13 @@ extern "C" {
 #endif /* USBD_AUDIO_FREQ */
 
 #ifndef USBD_AUDIO_FREQ_MAX
-#define USBD_AUDIO_FREQ_MAX                           48000U
+#define USBD_AUDIO_FREQ_MAX                           96000U
 #endif /* USBD_AUDIO_FREQ_MAX */
+
+/* Initial/default sampling frequency. Supported rates: 44100 / 48000 / 96000. */
+#ifndef USBD_AUDIO_FREQ_DEFAULT
+#define USBD_AUDIO_FREQ_DEFAULT                       48000U
+#endif /* USBD_AUDIO_FREQ_DEFAULT */
 
 /* See USB Device Class Definition for Audio Devices v1.0 p.77:
    max volume is 0 dB (no attenuation), min is -96 dB, 3 dB steps.
@@ -83,7 +88,7 @@ extern "C" {
 
 #define SOF_RATE                                      0x02U
 
-#define USB_AUDIO_CONFIG_DESC_SIZ                     118U
+#define USB_AUDIO_CONFIG_DESC_SIZ                     124U
 
 #define AUDIO_INTERFACE_DESC_SIZE                     0x09U
 #define USB_AUDIO_DESC_SIZ                            0x09U
@@ -153,7 +158,7 @@ extern "C" {
 
 /* Number of sub-packets in the audio transfer buffer (even, > 3).
    Larger values increase latency: playback starts at half-fill. */
-#define AUDIO_OUT_PACKET_NUM                          8U
+#define AUDIO_OUT_PACKET_NUM                          16U
 
 /* Ring buffer size, in 32-bit SAI words (2 words per stereo frame). */
 #define AUDIO_BUF_WORDS                               (AUDIO_SAMPLES_PER_PACKET * 2U * AUDIO_OUT_PACKET_NUM)
@@ -245,6 +250,17 @@ uint32_t USBD_AUDIO_GetEpPcktSze(USBD_HandleTypeDef *pdev, uint8_t If, uint8_t E
 /**
   * @}
   */
+
+/* Debug instrumentation (LED danger-zone indicator + LCD readout in main.c).
+   Define AUDIO_DEBUG to enable; leave undefined for a clean production build. */
+#ifdef AUDIO_DEBUG
+extern volatile uint8_t  audio_dbg_danger;          /* 1 = ring buffer inside safe zone */
+extern volatile uint32_t audio_dbg_drop_count;      /* packets dropped by safe-zone check */
+extern volatile uint32_t audio_dbg_writable_samples;/* last writable sample count */
+extern volatile uint32_t audio_dbg_min_free;        /* min writable samples observed */
+extern volatile uint32_t audio_dbg_max_free;        /* max writable samples observed */
+extern volatile uint32_t audio_dbg_freq;            /* current sample rate (Hz) */
+#endif /* AUDIO_DEBUG */
 
 #ifdef __cplusplus
 }

@@ -259,16 +259,18 @@ __ALIGN_BEGIN static uint8_t USBD_AUDIO_CfgDesc[USB_AUDIO_CONFIG_DESC_SIZ] __ALI
   /* 07 byte*/
 
   /* USB Speaker Audio Type I Format Interface Descriptor */
-  0x0B,                                 /* bLength = 11 */
+  0x11,                                 /* bLength = 17 (3 frequencies) */
   AUDIO_INTERFACE_DESCRIPTOR_TYPE,      /* bDescriptorType */
   AUDIO_STREAMING_FORMAT_TYPE,          /* bDescriptorSubtype */
   AUDIO_FORMAT_TYPE_I,                  /* bFormatType */
   0x02,                                 /* bNrChannels */
   0x03,                                 /* bSubFrameSize: 3 bytes per frame (24-bit) */
   24,                                   /* bBitResolution (24 bits per sample) */
-  0x01,                                 /* bSamFreqType: 1 frequency supported */
-  AUDIO_SAMPLE_FREQ(USBD_AUDIO_FREQ),   /* Audio sampling frequency (3 bytes) */
-  /* 11 byte*/
+  0x03,                                 /* bSamFreqType: 3 frequencies supported */
+  AUDIO_SAMPLE_FREQ(44100U),            /* 44.1 kHz (3 bytes) */
+  AUDIO_SAMPLE_FREQ(48000U),            /* 48 kHz (3 bytes) */
+  AUDIO_SAMPLE_FREQ(96000U),            /* 96 kHz (3 bytes) */
+  /* 17 byte*/
 
   /* Endpoint 1 - Standard Descriptor */
   /* Isochronous Async endpoint for audio packets */
@@ -350,6 +352,15 @@ static uint8_t tmpbuf[AUDIO_OUT_PACKET_24B];
 /* DSP staging buffer (interleaved L/R float32) */
 static float dspbuf[AUDIO_SAMPLES_PER_PACKET * 2U];
 
+#ifdef AUDIO_DEBUG
+volatile uint8_t  audio_dbg_danger = 0U;
+volatile uint32_t audio_dbg_drop_count = 0U;
+volatile uint32_t audio_dbg_writable_samples = 0U;
+volatile uint32_t audio_dbg_min_free = AUDIO_BUF_WORDS / 2U;
+volatile uint32_t audio_dbg_max_free = 0U;
+volatile uint32_t audio_dbg_freq = USBD_AUDIO_FREQ_DEFAULT;
+#endif /* AUDIO_DEBUG */
+
 /**
   * @}
   */
@@ -427,7 +438,7 @@ static uint8_t USBD_AUDIO_Init(USBD_HandleTypeDef *pdev, uint8_t cfgidx)
   haudio->offset = AUDIO_OFFSET_UNKNOWN;
   haudio->wr_ptr = 0U;
   haudio->rd_enable = 0U;
-  haudio->freq = USBD_AUDIO_FREQ;
+  haudio->freq = USBD_AUDIO_FREQ_DEFAULT;
   haudio->volume = USBD_AUDIO_VOL_DEFAULT;
   haudio->vol_3dB_shift = USBD_AUDIO_Get_Vol3dB_Shift(USBD_AUDIO_VOL_DEFAULT);
   haudio->mute = USBD_AUDIO_MUTE_DEFAULT;
@@ -701,8 +712,12 @@ static uint8_t USBD_AUDIO_EP0_RxReady(USBD_HandleTypeDef *pdev)
         uint32_t new_freq = *(uint32_t *)&haudio->control.data & 0x00FFFFFFU;
         if (haudio->freq != new_freq)
         {
-          haudio->freq = new_freq;
-          AUDIO_OUT_Restart(pdev);
+          /* Only accept a rate we can actually generate (PLL2/SAI table). */
+          if (BSP_AUDIO_OUT_GetRateConfig(new_freq) != NULL)
+          {
+            haudio->freq = new_freq;
+            AUDIO_OUT_Restart(pdev);
+          }
         }
       }
     }
@@ -761,6 +776,19 @@ static uint8_t USBD_AUDIO_SOF(USBD_HandleTypeDef *pdev)
       writable_words = rd_words + AUDIO_BUF_WORDS - haudio->wr_ptr;
     }
     uint32_t writable_samples = writable_words / 2U;
+
+#ifdef AUDIO_DEBUG
+    audio_dbg_writable_samples = writable_samples;
+    if (writable_samples < audio_dbg_min_free)
+    {
+      audio_dbg_min_free = writable_samples;
+    }
+    if (writable_samples > audio_dbg_max_free)
+    {
+      audio_dbg_max_free = writable_samples;
+    }
+    audio_dbg_danger = (writable_samples < AUDIO_BUF_SAFEZONE_SAMPLES) ? 1U : 0U;
+#endif /* AUDIO_DEBUG */
 
     sof_count++;
     if (sof_count == 1U)
@@ -898,6 +926,35 @@ static uint8_t USBD_AUDIO_DataOut(USBD_HandleTypeDef *pdev, uint8_t epnum)
     }
 
     num_frames = curr_length / 6U; /* 3 bytes per sample, 2 samples per frame */
+
+    /* Safe-zone check: if the ring buffer has insufficient free space, drop this
+       packet rather than overwrite unplayed audio. Only relevant once playback
+       has started (before that the DMA read pointer is not advancing). */
+    if (is_playing == 1U)
+    {
+      uint32_t rd_words = AUDIO_BUF_WORDS - BSP_AUDIO_OUT_GetRemainingDataSize();
+      uint32_t free_words;
+      uint32_t needed_words = num_frames * 2U + AUDIO_BUF_SAFEZONE_SAMPLES * 2U;
+
+      if (rd_words >= haudio->wr_ptr)
+      {
+        free_words = rd_words - haudio->wr_ptr;
+      }
+      else
+      {
+        free_words = rd_words + AUDIO_BUF_WORDS - haudio->wr_ptr;
+      }
+
+      if (free_words < needed_words)
+      {
+#ifdef AUDIO_DEBUG
+        audio_dbg_drop_count++;
+#endif /* AUDIO_DEBUG */
+        /* Re-arm the endpoint and discard the packet */
+        (void)USBD_LL_PrepareReceive(pdev, AUDIO_OUT_EP, tmpbuf, AUDIO_OUT_PACKET_24B);
+        return (uint8_t)USBD_OK;
+      }
+    }
 
     /* Decode 24-bit LE bytes -> float32 ([-1, 1)) */
     for (i = 0; i < num_frames; i++)
@@ -1103,6 +1160,10 @@ static void AUDIO_OUT_StopAndReset(USBD_HandleTypeDef *pdev)
   is_playing = 0U;
   audio_buf_writable_samples_last = AUDIO_BUF_WORDS / 4U;
 
+#ifdef AUDIO_DEBUG
+  audio_dbg_danger = 0U;
+#endif /* AUDIO_DEBUG */
+
   haudio->offset = AUDIO_OFFSET_UNKNOWN;
   haudio->rd_enable = 0U;
   haudio->wr_ptr = 0U;
@@ -1124,7 +1185,32 @@ static void AUDIO_OUT_Restart(USBD_HandleTypeDef *pdev)
 
   AUDIO_OUT_StopAndReset(pdev);
 
-  fb_nom = fb_value = AUDIO_FB_DEFAULT;
+  /* Set the nominal feedback to the actual SAI rate for the selected frequency */
+  {
+    const AUDIO_RateConfig_t *cfg = BSP_AUDIO_OUT_GetRateConfig(haudio->freq);
+    if (cfg != NULL)
+    {
+      fb_nom = fb_value = cfg->fb_nom;
+    }
+    else
+    {
+      fb_nom = fb_value = AUDIO_FB_DEFAULT;
+    }
+
+    /* Refresh the feedback packet immediately so the first SOF transmit after
+       restart does not send the previous rate's value. */
+    fb_data[0] = (uint8_t)((fb_value >> 8) & 0x000000FFU);
+    fb_data[1] = (uint8_t)((fb_value >> 16) & 0x000000FFU);
+    fb_data[2] = (uint8_t)((fb_value >> 24) & 0x000000FFU);
+  }
+
+#ifdef AUDIO_DEBUG
+  audio_dbg_freq = haudio->freq;
+  audio_dbg_min_free = AUDIO_BUF_WORDS / 2U;
+  audio_dbg_max_free = 0U;
+  audio_dbg_drop_count = 0U;
+  audio_dbg_danger = 0U;
+#endif /* AUDIO_DEBUG */
 
   ((USBD_AUDIO_ItfTypeDef *)pdev->pUserData[pdev->classId])->Init(haudio->freq,
                                                                   haudio->volume,
