@@ -22,7 +22,9 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include "board.h"
+#include "lcd.h"
+#include <stdio.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -52,7 +54,7 @@ SPI_HandleTypeDef hspi4;
 TIM_HandleTypeDef htim1;
 
 /* USER CODE BEGIN PV */
-
+extern USBD_HandleTypeDef hUsbDeviceHS;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -112,7 +114,11 @@ int main(void)
   MX_TIM1_Init();
   MX_USB_DEVICE_Init();
   /* USER CODE BEGIN 2 */
+  board_led_init();
+  LCD_Init();
 
+  LCD_ShowString(4, 4, 152, 16, 16, (uint8_t *)"STM32H7 USB DAC");
+  LCD_ShowString(4, 30, 152, 16, 16, (uint8_t *)"USB: -");
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -122,6 +128,26 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+    uint8_t usb_state = hUsbDeviceHS.dev_state;
+    static uint8_t usb_state_last = 0xFFU;
+    uint8_t text[24];
+
+    if (usb_state != usb_state_last)
+    {
+      usb_state_last = usb_state;
+      switch (usb_state)
+      {
+        case USBD_STATE_CONFIGURED: sprintf((char *)text, "USB: Configured"); break;
+        case USBD_STATE_ADDRESSED:  sprintf((char *)text, "USB: Addressed "); break;
+        case USBD_STATE_SUSPENDED:  sprintf((char *)text, "USB: Suspended "); break;
+        case USBD_STATE_DEFAULT:    sprintf((char *)text, "USB: Connected "); break;
+        default:                    sprintf((char *)text, "USB: Unknown   "); break;
+      }
+      LCD_ShowString(4, 30, 152, 16, 16, text);
+    }
+
+    board_led_toggle();
+    HAL_Delay(200);
   }
   /* USER CODE END 3 */
 }
@@ -480,6 +506,24 @@ void MPU_Config(void)
   MPU_InitStruct.IsBufferable = MPU_ACCESS_NOT_BUFFERABLE;
 
   HAL_MPU_ConfigRegion(&MPU_InitStruct);
+
+  /* Audio ring buffer region: RAM_D2 (0x30000000, 32 KB) holds the SAI1 DMA
+     buffer (`.audio_buf` linker section). It is read by DMA1_Stream0 and
+     written by the CPU in the USB DataOut ISR, so it must be non-cacheable. */
+  MPU_InitStruct.Enable = MPU_REGION_ENABLE;
+  MPU_InitStruct.Number = MPU_REGION_NUMBER1;
+  MPU_InitStruct.BaseAddress = 0x30000000U;
+  MPU_InitStruct.Size = MPU_REGION_SIZE_32KB;
+  MPU_InitStruct.SubRegionDisable = 0x00;
+  MPU_InitStruct.TypeExtField = MPU_TEX_LEVEL1;
+  MPU_InitStruct.AccessPermission = MPU_REGION_FULL_ACCESS;
+  MPU_InitStruct.DisableExec = MPU_INSTRUCTION_ACCESS_DISABLE;
+  MPU_InitStruct.IsShareable = MPU_ACCESS_SHAREABLE;
+  MPU_InitStruct.IsCacheable = MPU_ACCESS_NOT_CACHEABLE;
+  MPU_InitStruct.IsBufferable = MPU_ACCESS_NOT_BUFFERABLE;
+
+  HAL_MPU_ConfigRegion(&MPU_InitStruct);
+
   /* Enables the MPU */
   HAL_MPU_Enable(MPU_PRIVILEGED_DEFAULT);
 

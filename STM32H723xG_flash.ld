@@ -197,6 +197,15 @@ SECTIONS
     . = ALIGN(8);
   } >DTCMRAM
 
+  /* DMA-accessible audio ring buffer (RAM_D2). Marked non-cacheable by an
+     MPU region in main.c; DMA1_Stream0 reads this, so it must NOT be in DTCM. */
+  .audio_buf (NOLOAD) :
+  {
+    . = ALIGN(32);
+    KEEP(*(.audio_buf))
+    . = ALIGN(32);
+  } >RAM_D2
+
 
 
   /* Remove information from the standard libraries */

@@ -20,6 +20,7 @@
 
 /* Includes ------------------------------------------------------------------*/
 #include "usbd_audio_if.h"
+#include "bsp_audio.h"
 
 /* USER CODE BEGIN INCLUDE */
 
@@ -115,12 +116,12 @@ extern USBD_HandleTypeDef hUsbDeviceHS;
   * @{
   */
 
-static int8_t AUDIO_Init_HS(uint32_t AudioFreq, uint32_t Volume, uint32_t options);
-static int8_t AUDIO_DeInit_HS(uint32_t options);
-static int8_t AUDIO_AudioCmd_HS(uint8_t* pbuf, uint32_t size, uint8_t cmd);
-static int8_t AUDIO_VolumeCtl_HS(uint8_t vol);
+static int8_t AUDIO_Init_HS(uint32_t AudioFreq, int16_t Volume, uint8_t options);
+static int8_t AUDIO_DeInit_HS(uint8_t options);
+static int8_t AUDIO_AudioCmd_HS(uint32_t* pbuf, uint16_t size, uint8_t cmd);
+static int8_t AUDIO_VolumeCtl_HS(int16_t vol);
 static int8_t AUDIO_MuteCtl_HS(uint8_t cmd);
-static int8_t AUDIO_PeriodicTC_HS(uint8_t *pbuf, uint32_t size, uint8_t cmd);
+static int8_t AUDIO_PeriodicTC_HS(uint8_t cmd);
 static int8_t AUDIO_GetState_HS(void);
 
 /* USER CODE BEGIN PRIVATE_FUNCTIONS_DECLARATION */
@@ -150,12 +151,15 @@ USBD_AUDIO_ItfTypeDef USBD_AUDIO_fops_HS =
   * @param  options: Reserved for future use
   * @retval USBD_OK if all operations are OK else USBD_FAIL
   */
-static int8_t AUDIO_Init_HS(uint32_t AudioFreq, uint32_t Volume, uint32_t options)
+static int8_t AUDIO_Init_HS(uint32_t AudioFreq, int16_t Volume, uint8_t options)
 {
   /* USER CODE BEGIN 9 */
-  UNUSED(AudioFreq);
   UNUSED(Volume);
   UNUSED(options);
+  if (BSP_AUDIO_OUT_Init(AudioFreq) != 0)
+  {
+    return (USBD_FAIL);
+  }
   return (USBD_OK);
   /* USER CODE END 9 */
 }
@@ -165,10 +169,11 @@ static int8_t AUDIO_Init_HS(uint32_t AudioFreq, uint32_t Volume, uint32_t option
   * @param  options: Reserved for future use
   * @retval USBD_OK if all operations are OK else USBD_FAIL
   */
-static int8_t AUDIO_DeInit_HS(uint32_t options)
+static int8_t AUDIO_DeInit_HS(uint8_t options)
 {
   /* USER CODE BEGIN 10 */
   UNUSED(options);
+  BSP_AUDIO_OUT_DeInit();
   return (USBD_OK);
   /* USER CODE END 10 */
 }
@@ -176,37 +181,43 @@ static int8_t AUDIO_DeInit_HS(uint32_t options)
 /**
   * @brief  Handles AUDIO command.
   * @param  pbuf: Pointer to buffer of data to be sent
-  * @param  size: Number of data to be sent (in bytes)
+  * @param  size: Number of data to be sent (in 32-bit words)
   * @param  cmd: Command opcode
   * @retval USBD_OK if all operations are OK else USBD_FAIL
   */
-static int8_t AUDIO_AudioCmd_HS(uint8_t* pbuf, uint32_t size, uint8_t cmd)
+static int8_t AUDIO_AudioCmd_HS(uint32_t* pbuf, uint16_t size, uint8_t cmd)
 {
   /* USER CODE BEGIN 11 */
   switch(cmd)
   {
     case AUDIO_CMD_START:
-    break;
+      if (BSP_AUDIO_OUT_Play(pbuf, size) != 0)
+      {
+        return (USBD_FAIL);
+      }
+      break;
 
     case AUDIO_CMD_PLAY:
-    break;
+      /* Circular DMA: no buffer change needed */
+      break;
+
+    default:
+      break;
   }
-  UNUSED(pbuf);
-  UNUSED(size);
-  UNUSED(cmd);
   return (USBD_OK);
   /* USER CODE END 11 */
 }
 
 /**
   * @brief  Controls AUDIO Volume.
-  * @param  vol: volume level (0..100)
+  * @param  vol: volume level (USB spec, 0 dB .. -96 dB)
   * @retval USBD_OK if all operations are OK else USBD_FAIL
   */
-static int8_t AUDIO_VolumeCtl_HS(uint8_t vol)
+static int8_t AUDIO_VolumeCtl_HS(int16_t vol)
 {
   /* USER CODE BEGIN 12 */
   UNUSED(vol);
+  /* Volume scaling is applied in usbd_audio.c */
   return (USBD_OK);
   /* USER CODE END 12 */
 }
@@ -220,6 +231,7 @@ static int8_t AUDIO_MuteCtl_HS(uint8_t cmd)
 {
   /* USER CODE BEGIN 13 */
   UNUSED(cmd);
+  /* Software mute is applied in usbd_audio.c */
   return (USBD_OK);
   /* USER CODE END 13 */
 }
@@ -229,11 +241,9 @@ static int8_t AUDIO_MuteCtl_HS(uint8_t cmd)
   * @param  cmd: command opcode
   * @retval USBD_OK if all operations are OK else USBD_FAIL
   */
-static int8_t AUDIO_PeriodicTC_HS(uint8_t *pbuf, uint32_t size, uint8_t cmd)
+static int8_t AUDIO_PeriodicTC_HS(uint8_t cmd)
 {
   /* USER CODE BEGIN 14 */
-  UNUSED(pbuf);
-  UNUSED(size);
   UNUSED(cmd);
   return (USBD_OK);
   /* USER CODE END 14 */

@@ -36,7 +36,6 @@ extern "C" {
   * @{
   */
 
-
 /** @defgroup USBD_AUDIO_Exported_Defines
   * @{
   */
@@ -45,23 +44,47 @@ extern "C" {
 #define USBD_AUDIO_FREQ                               48000U
 #endif /* USBD_AUDIO_FREQ */
 
+#ifndef USBD_AUDIO_FREQ_MAX
+#define USBD_AUDIO_FREQ_MAX                           48000U
+#endif /* USBD_AUDIO_FREQ_MAX */
+
+/* See USB Device Class Definition for Audio Devices v1.0 p.77:
+   max volume is 0 dB (no attenuation), min is -96 dB, 3 dB steps.
+   1 dB <=> 0x100, so -96 dB = 0xA000 */
+#ifndef USBD_AUDIO_VOL_MAX
+#define USBD_AUDIO_VOL_MAX                            0x0000U
+#endif /* USBD_AUDIO_VOL_MAX */
+
+#ifndef USBD_AUDIO_VOL_MIN
+#define USBD_AUDIO_VOL_MIN                            0xA000U
+#endif /* USBD_AUDIO_VOL_MIN */
+
+#ifndef USBD_AUDIO_VOL_DEFAULT
+#define USBD_AUDIO_VOL_DEFAULT                        0x0000U
+#endif /* USBD_AUDIO_VOL_DEFAULT */
+
+#ifndef USBD_AUDIO_VOL_STEP
+#define USBD_AUDIO_VOL_STEP                           0x0300U
+#endif /* USBD_AUDIO_VOL_STEP */
+
+/* default mute state: 0 = unmuted */
+#ifndef USBD_AUDIO_MUTE_DEFAULT
+#define USBD_AUDIO_MUTE_DEFAULT                       0x00U
+#endif /* USBD_AUDIO_MUTE_DEFAULT */
+
+/* Interface */
 #ifndef USBD_MAX_NUM_INTERFACES
 #define USBD_MAX_NUM_INTERFACES                       1U
-#endif /* USBD_AUDIO_FREQ */
+#endif /* USBD_MAX_NUM_INTERFACES */
 
-#ifndef AUDIO_HS_BINTERVAL
-#define AUDIO_HS_BINTERVAL                            0x01U
-#endif /* AUDIO_HS_BINTERVAL */
-
-#ifndef AUDIO_FS_BINTERVAL
-#define AUDIO_FS_BINTERVAL                            0x01U
-#endif /* AUDIO_FS_BINTERVAL */
-
-#ifndef AUDIO_OUT_EP
+/* bEndpointAddress, see UAC 1.0 spec, p.61 */
 #define AUDIO_OUT_EP                                  0x01U
-#endif /* AUDIO_OUT_EP */
+#define AUDIO_IN_EP                                   0x81U
 
-#define USB_AUDIO_CONFIG_DESC_SIZ                     0x6DU
+#define SOF_RATE                                      0x02U
+
+#define USB_AUDIO_CONFIG_DESC_SIZ                     118U
+
 #define AUDIO_INTERFACE_DESC_SIZE                     0x09U
 #define USB_AUDIO_DESC_SIZ                            0x09U
 #define AUDIO_STANDARD_ENDPOINT_DESC_SIZE             0x09U
@@ -71,7 +94,6 @@ extern "C" {
 #define USB_DEVICE_CLASS_AUDIO                        0x01U
 #define AUDIO_SUBCLASS_AUDIOCONTROL                   0x01U
 #define AUDIO_SUBCLASS_AUDIOSTREAMING                 0x02U
-#define AUDIO_SUBCLASS_MIDISTREAMING                  0x03U
 #define AUDIO_PROTOCOL_UNDEFINED                      0x00U
 #define AUDIO_STREAMING_GENERAL                       0x01U
 #define AUDIO_STREAMING_FORMAT_TYPE                   0x02U
@@ -91,29 +113,53 @@ extern "C" {
 #define AUDIO_STREAMING_INTERFACE_DESC_SIZE           0x07U
 
 #define AUDIO_CONTROL_MUTE                            0x0001U
+#define AUDIO_CONTROL_VOL                             0x0002U
 
 #define AUDIO_FORMAT_TYPE_I                           0x01U
 #define AUDIO_FORMAT_TYPE_III                         0x03U
 
 #define AUDIO_ENDPOINT_GENERAL                        0x01U
 
+/* Audio Requests */
 #define AUDIO_REQ_GET_CUR                             0x81U
+#define AUDIO_REQ_GET_MIN                             0x82U
+#define AUDIO_REQ_GET_MAX                             0x83U
+#define AUDIO_REQ_GET_RES                             0x84U
 #define AUDIO_REQ_SET_CUR                             0x01U
+#define AUDIO_REQ_SET_MIN                             0x02U
+#define AUDIO_REQ_SET_MAX                             0x03U
+#define AUDIO_REQ_SET_RES                             0x04U
 
 #define AUDIO_OUT_STREAMING_CTRL                      0x02U
 
-#define AUDIO_OUT_TC                                  0x01U
-#define AUDIO_IN_TC                                   0x02U
+/* Audio Control Requests (bmRequest & 0x1F) */
+#define AUDIO_CONTROL_REQ                             0x01U
+/* Feature Unit, UAC Spec 1.0 p.102 */
+#define AUDIO_CONTROL_REQ_FU_MUTE                     0x01U
+#define AUDIO_CONTROL_REQ_FU_VOL                      0x02U
 
+/* Audio Streaming Requests */
+#define AUDIO_STREAMING_REQ                           0x02U
+#define AUDIO_STREAMING_REQ_FREQ_CTRL                 0x01U
+#define AUDIO_STREAMING_REQ_PITCH_CTRL                0x02U
 
-#define AUDIO_OUT_PACKET                              (uint16_t)(((USBD_AUDIO_FREQ * 2U * 2U) / 1000U))
-#define AUDIO_DEFAULT_VOLUME                          70U
+/* Max packet size: (freq/1000 + extra) * channels * bytes_per_sample
+   e.g. 48kHz, 24bit: (48 + 1) * 2(stereo) * 3(24bit) = 294 bytes */
+#define AUDIO_SAMPLES_PER_PACKET                      ((USBD_AUDIO_FREQ_MAX / 1000U) + 1U)
+#define AUDIO_OUT_PACKET_24B                          (AUDIO_SAMPLES_PER_PACKET * 2U * 3U)
 
-/* Number of sub-packets in the audio transfer buffer. You can modify this value but always make sure
-  that it is an even number and higher than 3 */
-#define AUDIO_OUT_PACKET_NUM                          80U
-/* Total size of the audio transfer buffer */
-#define AUDIO_TOTAL_BUF_SIZE                          ((uint16_t)(AUDIO_OUT_PACKET * AUDIO_OUT_PACKET_NUM))
+/* Feedback endpoint (IN) packet size: 3 bytes, 10.14 format */
+#define AUDIO_IN_PACKET                               3U
+
+/* Number of sub-packets in the audio transfer buffer (even, > 3).
+   Larger values increase latency: playback starts at half-fill. */
+#define AUDIO_OUT_PACKET_NUM                          8U
+
+/* Ring buffer size, in 32-bit SAI words (2 words per stereo frame). */
+#define AUDIO_BUF_WORDS                               (AUDIO_SAMPLES_PER_PACKET * 2U * AUDIO_OUT_PACKET_NUM)
+
+/* Minimum writable frames before the writer risks overwriting unplayed data */
+#define AUDIO_BUF_SAFEZONE_SAMPLES                    AUDIO_SAMPLES_PER_PACKET
 
 /* Audio Commands enumeration */
 typedef enum
@@ -122,7 +168,6 @@ typedef enum
   AUDIO_CMD_PLAY,
   AUDIO_CMD_STOP,
 } AUDIO_CMD_TypeDef;
-
 
 typedef enum
 {
@@ -135,160 +180,43 @@ typedef enum
   * @}
   */
 
-
 /** @defgroup USBD_CORE_Exported_TypesDefinitions
   * @{
   */
 typedef struct
 {
-  uint8_t cmd;
-  uint8_t data[USB_MAX_EP0_SIZE];
-  uint8_t len;
-  uint8_t unit;
+  uint8_t cmd;                    /* bRequest */
+  uint8_t req_type;               /* bmRequest */
+  uint8_t cs;                     /* wValue (high byte): Control Selector */
+  uint8_t cn;                     /* wValue (low byte): Control Number */
+  uint8_t unit;                   /* wIndex: Feature Unit / Interface / Endpoint */
+  uint8_t len;                    /* wLength */
+  uint8_t data[USB_MAX_EP0_SIZE]; /* Data */
 } USBD_AUDIO_ControlTypeDef;
-
 
 typedef struct
 {
-  uint32_t alt_setting;
-  uint8_t buffer[AUDIO_TOTAL_BUF_SIZE];
-  AUDIO_OffsetTypeDef offset;
-  uint8_t rd_enable;
-  uint16_t rd_ptr;
-  uint16_t wr_ptr;
+  uint32_t                  alt_setting;
+  AUDIO_OffsetTypeDef       offset;
+  uint8_t                   rd_enable;
+  uint16_t                  wr_ptr;       /* ring buffer write index, in 32-bit words */
+  uint32_t                  freq;
+  int16_t                   volume;
+  int32_t                   vol_3dB_shift; /* 3 dB attenuation steps equivalent to volume */
+  uint8_t                   mute;          /* 0 = unmuted, 1 = muted */
   USBD_AUDIO_ControlTypeDef control;
 } USBD_AUDIO_HandleTypeDef;
 
-
 typedef struct
 {
-  int8_t (*Init)(uint32_t AudioFreq, uint32_t Volume, uint32_t options);
-  int8_t (*DeInit)(uint32_t options);
-  int8_t (*AudioCmd)(uint8_t *pbuf, uint32_t size, uint8_t cmd);
-  int8_t (*VolumeCtl)(uint8_t vol);
+  int8_t (*Init)(uint32_t AudioFreq, int16_t Volume, uint8_t options);
+  int8_t (*DeInit)(uint8_t options);
+  int8_t (*AudioCmd)(uint32_t *pbuf, uint16_t size, uint8_t cmd);
+  int8_t (*VolumeCtl)(int16_t vol);
   int8_t (*MuteCtl)(uint8_t cmd);
-  int8_t (*PeriodicTC)(uint8_t *pbuf, uint32_t size, uint8_t cmd);
+  int8_t (*PeriodicTC)(uint8_t cmd);
   int8_t (*GetState)(void);
 } USBD_AUDIO_ItfTypeDef;
-
-/*
- * Audio Class specification release 1.0
- */
-
-/* Table 4-2: Class-Specific AC Interface Header Descriptor */
-typedef struct
-{
-  uint8_t           bLength;
-  uint8_t           bDescriptorType;
-  uint8_t           bDescriptorSubtype;
-  uint16_t          bcdADC;
-  uint16_t          wTotalLength;
-  uint8_t           bInCollection;
-  uint8_t           baInterfaceNr;
-} __PACKED USBD_SpeakerIfDescTypeDef;
-
-/* Table 4-3: Input Terminal Descriptor */
-typedef struct
-{
-  uint8_t           bLength;
-  uint8_t           bDescriptorType;
-  uint8_t           bDescriptorSubtype;
-  uint8_t           bTerminalID;
-  uint16_t          wTerminalType;
-  uint8_t           bAssocTerminal;
-  uint8_t           bNrChannels;
-  uint16_t          wChannelConfig;
-  uint8_t           iChannelNames;
-  uint8_t           iTerminal;
-} __PACKED USBD_SpeakerInDescTypeDef;
-
-/* USB Speaker Audio Feature Unit Descriptor */
-typedef struct
-{
-  uint8_t           bLength;
-  uint8_t           bDescriptorType;
-  uint8_t           bDescriptorSubtype;
-  uint8_t           bUnitID;
-  uint8_t           bSourceID;
-  uint8_t           bControlSize;
-  uint16_t          bmaControls;
-  uint8_t           iTerminal;
-} __PACKED USBD_SpeakerFeatureDescTypeDef;
-
-/* Table 4-4: Output Terminal Descriptor */
-typedef struct
-{
-  uint8_t           bLength;
-  uint8_t           bDescriptorType;
-  uint8_t           bDescriptorSubtype;
-  uint8_t           bTerminalID;
-  uint16_t          wTerminalType;
-  uint8_t           bAssocTerminal;
-  uint8_t           bSourceID;
-  uint8_t           iTerminal;
-} __PACKED USBD_SpeakerOutDescTypeDef;
-
-/* Table 4-19: Class-Specific AS Interface Descriptor */
-typedef struct
-{
-  uint8_t           bLength;
-  uint8_t           bDescriptorType;
-  uint8_t           bDescriptorSubtype;
-  uint8_t           bTerminalLink;
-  uint8_t           bDelay;
-  uint16_t          wFormatTag;
-} __PACKED USBD_SpeakerStreamIfDescTypeDef;
-
-/* USB Speaker Audio Type III Format Interface Descriptor */
-typedef struct
-{
-  uint8_t           bLength;
-  uint8_t           bDescriptorType;
-  uint8_t           bDescriptorSubtype;
-  uint8_t           bFormatType;
-  uint8_t           bNrChannels;
-  uint8_t           bSubFrameSize;
-  uint8_t           bBitResolution;
-  uint8_t           bSamFreqType;
-  uint8_t           tSamFreq2;
-  uint8_t           tSamFreq1;
-  uint8_t           tSamFreq0;
-} USBD_SpeakerIIIFormatIfDescTypeDef;
-
-/* Table 4-17: Standard AC Interrupt Endpoint Descriptor */
-typedef struct
-{
-  uint8_t           bLength;
-  uint8_t           bDescriptorType;
-  uint8_t           bEndpointAddress;
-  uint8_t           bmAttributes;
-  uint16_t          wMaxPacketSize;
-  uint8_t           bInterval;
-  uint8_t           bRefresh;
-  uint8_t           bSynchAddress;
-} __PACKED USBD_SpeakerEndDescTypeDef;
-
-/* Table 4-21: Class-Specific AS Isochronous Audio Data Endpoint Descriptor        */
-typedef struct
-{
-  uint8_t           bLength;
-  uint8_t           bDescriptorType;
-  uint8_t           bDescriptor;
-  uint8_t           bmAttributes;
-  uint8_t           bLockDelayUnits;
-  uint16_t          wLockDelay;
-} __PACKED USBD_SpeakerEndStDescTypeDef;
-
-/**
-  * @}
-  */
-
-
-
-/** @defgroup USBD_CORE_Exported_Macros
-  * @{
-  */
-
 /**
   * @}
   */
@@ -296,7 +224,6 @@ typedef struct
 /** @defgroup USBD_CORE_Exported_Variables
   * @{
   */
-
 extern USBD_ClassTypeDef USBD_AUDIO;
 #define USBD_AUDIO_CLASS &USBD_AUDIO
 /**

@@ -22,6 +22,7 @@
 #include "stm32h7xx_it.h"
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include "usbd_audio_if.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -228,5 +229,23 @@ void OTG_HS_IRQHandler(void)
 }
 
 /* USER CODE BEGIN 1 */
+
+/**
+  * @brief  SAI1 TX DMA transfer complete (circular: fired every full wrap).
+  */
+void HAL_SAI_TxCpltCallback(SAI_HandleTypeDef *hsai)
+{
+  (void)hsai;
+  TransferComplete_CallBack_HS();
+}
+
+/**
+  * @brief  SAI1 TX DMA half transfer complete (circular: fired every half wrap).
+  */
+void HAL_SAI_TxHalfCpltCallback(SAI_HandleTypeDef *hsai)
+{
+  (void)hsai;
+  HalfTransfer_CallBack_HS();
+}
 
 /* USER CODE END 1 */
