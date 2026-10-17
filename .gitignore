@@ -1,4 +1,6 @@
 build/
 doxygen/
 Doxyfile
-
+AGENTS.md
+compile_command.json
+opencode.json
