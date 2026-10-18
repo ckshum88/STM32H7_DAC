@@ -207,7 +207,7 @@ typedef struct
   uint16_t                  wr_ptr;       /* ring buffer write index, in 32-bit words */
   uint32_t                  freq;
   int16_t                   volume;
-  int32_t                   vol_3dB_shift; /* 3 dB attenuation steps equivalent to volume */
+  float                     vol_factor;    /* linear gain from volume (0..1, 1 = 0 dB) */
   uint8_t                   mute;          /* 0 = unmuted, 1 = muted */
   USBD_AUDIO_ControlTypeDef control;
 } USBD_AUDIO_HandleTypeDef;
@@ -231,6 +231,10 @@ typedef struct
   */
 extern USBD_ClassTypeDef USBD_AUDIO;
 #define USBD_AUDIO_CLASS &USBD_AUDIO
+
+/* Current audio sample rate (Hz). Exposed for the status display; updated on
+   init and whenever the host switches rate. */
+extern volatile uint32_t audio_freq_hz;
 /**
   * @}
   */

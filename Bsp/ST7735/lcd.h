@@ -35,6 +35,8 @@ uint32_t LCD_GetBrightness(void);
 void LCD_Light(uint32_t Brightness_Dis,uint32_t time);
 void LCD_ShowChar(uint16_t x,uint16_t y,uint8_t num,uint8_t size,uint8_t mode);
 void LCD_ShowString(uint16_t x,uint16_t y,uint16_t width,uint16_t height,uint8_t size,uint8_t *p);
+void LCD_FillRect(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16_t color);
+void LCD_ClearArea(uint16_t x, uint16_t y, uint16_t w, uint16_t h);
 extern ST7735_Ctx_t ST7735Ctx;
 
 #endif  

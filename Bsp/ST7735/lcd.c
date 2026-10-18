@@ -222,6 +222,16 @@ void LCD_ShowString(uint16_t x,uint16_t y,uint16_t width,uint16_t height,uint8_t
     }  
 }
 
+void LCD_FillRect(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16_t color)
+{
+	ST7735_FillRect(&st7735_pObj, x, y, w, h, color);
+}
+
+void LCD_ClearArea(uint16_t x, uint16_t y, uint16_t w, uint16_t h)
+{
+	ST7735_FillRect(&st7735_pObj, x, y, w, h, BLACK);
+}
+
 static int32_t lcd_init(void)
 {
 	int32_t result = ST7735_OK;

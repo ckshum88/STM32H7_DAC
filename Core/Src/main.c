@@ -25,6 +25,7 @@
 #include "board.h"
 #include "lcd.h"
 #include "usbd_audio.h"
+#include "audio_dsp.h"
 #include <stdio.h>
 /* USER CODE END Includes */
 
@@ -74,6 +75,41 @@ static void MX_TIM1_Init(void);
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 
+/* Status header (top 20 px) + spectrum (lower 60 px) geometry. */
+#define HEADER_H     20U
+#define HEADER_TEXT_Y 2U
+#define RATE_TEXT_X   116U
+
+#define SPECTRUM_Y    HEADER_H
+#define SPECTRUM_H    60U
+#define SPECTRUM_BARS 8U
+#define BAR_PITCH     (160U / SPECTRUM_BARS)
+#define BAR_WIDTH     (BAR_PITCH - 4U)
+
+static void show_rate(uint32_t freq)
+{
+  const char *s;
+
+  if (freq == 44100U)      s = "44.1K";
+  else if (freq == 48000U) s = "48K";
+  else if (freq == 96000U) s = "96K";
+  else                     s = "  ?K";
+
+  POINT_COLOR = WHITE;
+  BACK_COLOR  = BLACK;
+  LCD_ClearArea(RATE_TEXT_X, HEADER_TEXT_Y, 160U - RATE_TEXT_X, 16U);
+  LCD_ShowString(RATE_TEXT_X, HEADER_TEXT_Y, 160U - RATE_TEXT_X, 16U, 16, (uint8_t *)s);
+}
+
+static void show_usb_state(uint8_t configured)
+{
+  POINT_COLOR = WHITE;
+  BACK_COLOR  = BLACK;
+  LCD_ClearArea(4, HEADER_TEXT_Y, RATE_TEXT_X - 4, 16U);
+  LCD_ShowString(4, HEADER_TEXT_Y, RATE_TEXT_X - 4, 16U, 16,
+                 (uint8_t *)(configured ? "USB" : "No USB"));
+}
+
 /* USER CODE END 0 */
 
 /**
@@ -118,8 +154,18 @@ int main(void)
   board_led_init();
   LCD_Init();
 
-  LCD_ShowString(4, 2, 152, 16, 16, (uint8_t *)"STM32H7 USB DAC");
-  LCD_ShowString(4, 26, 152, 16, 16, (uint8_t *)"USB: -");
+  LCD_ClearArea(0, 0, 160U, HEADER_H);
+  show_usb_state(0);
+  show_rate(audio_freq_hz);
+  LCD_ClearArea(0, SPECTRUM_Y, 160U, SPECTRUM_H);
+  {
+    uint32_t b;
+    for (b = 0; b < SPECTRUM_BARS; b++)
+    {
+      LCD_FillRect((uint16_t)(b * BAR_PITCH + 2U),
+                   (uint16_t)(SPECTRUM_Y + SPECTRUM_H - 1U), BAR_WIDTH, 1U, GREEN);
+    }
+  }
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -130,21 +176,38 @@ int main(void)
 
     /* USER CODE BEGIN 3 */
     uint8_t usb_state = hUsbDeviceHS.dev_state;
-    static uint8_t usb_state_last = 0xFFU;
-    uint8_t text[24];
+    static uint8_t  usb_state_last = 0xFFU;
+    static uint32_t rate_last = 0U;
 
     if (usb_state != usb_state_last)
     {
       usb_state_last = usb_state;
-      switch (usb_state)
+      show_usb_state(usb_state == USBD_STATE_CONFIGURED);
+    }
+
+    if (audio_freq_hz != rate_last)
+    {
+      rate_last = audio_freq_hz;
+      show_rate(audio_freq_hz);
+    }
+
+    {
+      float bars[SPECTRUM_BARS];
+      if (AudioDSP_Spectrum(bars, SPECTRUM_BARS) != 0U)
       {
-        case USBD_STATE_CONFIGURED: sprintf((char *)text, "USB: Configured"); break;
-        case USBD_STATE_ADDRESSED:  sprintf((char *)text, "USB: Addressed "); break;
-        case USBD_STATE_SUSPENDED:  sprintf((char *)text, "USB: Suspended "); break;
-        case USBD_STATE_DEFAULT:    sprintf((char *)text, "USB: Connected "); break;
-        default:                    sprintf((char *)text, "USB: Unknown   "); break;
+        uint32_t b;
+        LCD_ClearArea(0, SPECTRUM_Y, 160U, SPECTRUM_H);
+        for (b = 0; b < SPECTRUM_BARS; b++)
+        {
+          uint16_t h = (uint16_t)(bars[b] * (float)SPECTRUM_H);
+          uint16_t x = (uint16_t)(b * BAR_PITCH + 2U);
+          if (h > 0U)
+          {
+            LCD_FillRect(x, (uint16_t)(SPECTRUM_Y + SPECTRUM_H - h), BAR_WIDTH, h, GREEN);
+          }
+          LCD_FillRect(x, (uint16_t)(SPECTRUM_Y + SPECTRUM_H - 1U), BAR_WIDTH, 1U, GREEN);
+        }
       }
-      LCD_ShowString(4, 26, 152, 16, 16, text);
     }
 
 #ifdef AUDIO_DEBUG
@@ -161,9 +224,9 @@ int main(void)
       board_led_set(audio_dbg_danger ? 1U : 0U);
     }
 #else
-    board_led_toggle();
+    board_led_set(0U);
 #endif
-    HAL_Delay(200);
+    HAL_Delay(20);
   }
   /* USER CODE END 3 */
 }

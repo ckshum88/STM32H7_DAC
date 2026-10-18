@@ -40,6 +40,7 @@
 #include "bsp_audio.h"
 #include "audio_dsp.h"
 #include "stm32h7xx_ll_usb.h"
+#include <math.h>
 
 /** @addtogroup STM32_USB_DEVICE_LIBRARY
   * @{
@@ -104,8 +105,7 @@ static void AUDIO_REQ_GetRes(USBD_HandleTypeDef *pdev, USBD_SetupReqTypedef *req
 static void AUDIO_REQ_SetCurrent(USBD_HandleTypeDef *pdev, USBD_SetupReqTypedef *req);
 static void AUDIO_OUT_StopAndReset(USBD_HandleTypeDef *pdev);
 static void AUDIO_OUT_Restart(USBD_HandleTypeDef *pdev);
-static int32_t USBD_AUDIO_Get_Vol3dB_Shift(int16_t volume);
-static int32_t USBD_AUDIO_Volume_Ctrl(int32_t sample, int32_t shift_3dB);
+static float USBD_AUDIO_VolFactor(int16_t volume);
 
 /**
   * @}
@@ -335,6 +335,10 @@ volatile uint32_t all_ready = 0U;
 
 volatile uint32_t fb_nom = AUDIO_FB_DEFAULT;
 volatile uint32_t fb_value = AUDIO_FB_DEFAULT;
+
+/* Current audio sample rate (Hz), exposed for the status display. Updated on
+   init and whenever the host switches rate. */
+volatile uint32_t audio_freq_hz = USBD_AUDIO_FREQ_DEFAULT;
 volatile uint32_t audio_buf_writable_samples_last = AUDIO_BUF_WORDS / 4U;
 
 volatile uint8_t fb_data[3] = {
@@ -369,31 +373,14 @@ volatile uint32_t audio_dbg_freq = USBD_AUDIO_FREQ_DEFAULT;
   * @{
   */
 
-/* volume attenuation 0 dB (max) .. -96 dB (min) in 3 dB steps */
-static int32_t USBD_AUDIO_Get_Vol3dB_Shift(int16_t volume)
+/* Linear volume gain from the UAC 1.0 attenuation value.
+   volume is in 1/256 dB units, 0 dB (max) .. -96 dB (min). Computed only on
+   a SET_CUR, so the powf cost is off the per-sample path. */
+static float USBD_AUDIO_VolFactor(int16_t volume)
 {
   if (volume < (int16_t)USBD_AUDIO_VOL_MIN) volume = (int16_t)USBD_AUDIO_VOL_MIN;
   if (volume > (int16_t)USBD_AUDIO_VOL_MAX) volume = (int16_t)USBD_AUDIO_VOL_MAX;
-  return (int32_t)((((int16_t)USBD_AUDIO_VOL_MAX - volume) + (int16_t)USBD_AUDIO_VOL_STEP / 2) / (int16_t)USBD_AUDIO_VOL_STEP);
-}
-
-/* 6 dB = right shift by 1; odd 3 dB steps compensated by a *0.707 factor */
-static int32_t USBD_AUDIO_Volume_Ctrl(int32_t sample, int32_t shift_3dB)
-{
-  int32_t sample_atten = sample;
-  int32_t shift_6dB = shift_3dB >> 1;
-
-  if (shift_3dB & 1)
-  {
-    shift_6dB++;
-    sample_atten >>= shift_6dB;
-    sample_atten += (sample_atten >> 1);
-  }
-  else
-  {
-    sample_atten >>= shift_6dB;
-  }
-  return sample_atten;
+  return powf(10.0f, ((float)volume / 256.0f) / 20.0f);
 }
 
 /**
@@ -440,8 +427,10 @@ static uint8_t USBD_AUDIO_Init(USBD_HandleTypeDef *pdev, uint8_t cfgidx)
   haudio->rd_enable = 0U;
   haudio->freq = USBD_AUDIO_FREQ_DEFAULT;
   haudio->volume = USBD_AUDIO_VOL_DEFAULT;
-  haudio->vol_3dB_shift = USBD_AUDIO_Get_Vol3dB_Shift(USBD_AUDIO_VOL_DEFAULT);
+  haudio->vol_factor = USBD_AUDIO_VolFactor(USBD_AUDIO_VOL_DEFAULT);
   haudio->mute = USBD_AUDIO_MUTE_DEFAULT;
+
+  audio_freq_hz = haudio->freq;
 
   /* Initialize the Audio output Hardware layer */
   if (((USBD_AUDIO_ItfTypeDef *)pdev->pUserData[pdev->classId])->Init(haudio->freq,
@@ -696,7 +685,7 @@ static uint8_t USBD_AUDIO_EP0_RxReady(USBD_HandleTypeDef *pdev)
         {
           int16_t volume = *(int16_t *)&haudio->control.data[0];
           haudio->volume = volume;
-          haudio->vol_3dB_shift = USBD_AUDIO_Get_Vol3dB_Shift(volume);
+          haudio->vol_factor = USBD_AUDIO_VolFactor(volume);
           ((USBD_AUDIO_ItfTypeDef *)pdev->pUserData[pdev->classId])->VolumeCtl(volume);
           break;
         }
@@ -969,19 +958,19 @@ static uint8_t USBD_AUDIO_DataOut(USBD_HandleTypeDef *pdev, uint8_t epnum)
     /* DSP hook (pass-through by default) */
     AudioDSP_ProcessBlock(dspbuf, num_frames);
 
-    /* float32 -> int32 (24-bit) -> volume/mute -> left-justified I2S word */
+    /* Combined volume/mute + float->int24 scale (loop-invariant) */
+    float scale = (haudio->mute ? 0.0f : haudio->vol_factor) * AUDIO_FLOAT_SCALE;
+
+    /* float32 -> int32 (24-bit) with volume/mute -> left-justified I2S word */
     for (i = 0; i < num_frames; i++)
     {
-      int32_t l = (int32_t)(dspbuf[2U * i] * AUDIO_FLOAT_SCALE);
-      int32_t r = (int32_t)(dspbuf[2U * i + 1U] * AUDIO_FLOAT_SCALE);
+      int32_t l = (int32_t)(dspbuf[2U * i] * scale);
+      int32_t r = (int32_t)(dspbuf[2U * i + 1U] * scale);
 
       if (l > 8388607)  { l = 8388607;  }
       else if (l < -8388608) { l = -8388608; }
       if (r > 8388607)  { r = 8388607;  }
       else if (r < -8388608) { r = -8388608; }
-
-      l = haudio->mute ? 0 : USBD_AUDIO_Volume_Ctrl(l, haudio->vol_3dB_shift);
-      r = haudio->mute ? 0 : USBD_AUDIO_Volume_Ctrl(r, haudio->vol_3dB_shift);
 
       AudioRingBuffer[haudio->wr_ptr++] = (uint32_t)(l << 8);
       AudioRingBuffer[haudio->wr_ptr++] = (uint32_t)(r << 8);
@@ -1184,6 +1173,8 @@ static void AUDIO_OUT_Restart(USBD_HandleTypeDef *pdev)
   haudio = (USBD_AUDIO_HandleTypeDef *)pdev->pClassDataCmsit[pdev->classId];
 
   AUDIO_OUT_StopAndReset(pdev);
+
+  audio_freq_hz = haudio->freq;
 
   /* Set the nominal feedback to the actual SAI rate for the selected frequency */
   {
