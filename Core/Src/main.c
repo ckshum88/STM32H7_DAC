@@ -56,7 +56,7 @@ SPI_HandleTypeDef hspi4;
 TIM_HandleTypeDef htim1;
 
 /* USER CODE BEGIN PV */
-extern USBD_HandleTypeDef hUsbDeviceHS;
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -89,25 +89,37 @@ static void MX_TIM1_Init(void);
 static void show_rate(uint32_t freq)
 {
   const char *s;
+  uint16_t bg;
 
-  if (freq == 44100U)      s = "44.1K";
-  else if (freq == 48000U) s = "48K";
-  else if (freq == 96000U) s = "96K";
-  else                     s = "  ?K";
+  if (freq == 44100U)      { s = "44.1K"; bg = BLUE; }
+  else if (freq == 48000U) { s = "48K";   bg = GREEN; }
+  else if (freq == 96000U) { s = "96K";   bg = RED; }
+  else                     { s = "  ?K";  bg = BLACK; }
 
   POINT_COLOR = WHITE;
-  BACK_COLOR  = BLACK;
-  LCD_ClearArea(RATE_TEXT_X, HEADER_TEXT_Y, 160U - RATE_TEXT_X, 16U);
+  BACK_COLOR  = bg;
+  LCD_FillRect(RATE_TEXT_X, HEADER_TEXT_Y, 160U - RATE_TEXT_X, 16U, bg);
   LCD_ShowString(RATE_TEXT_X, HEADER_TEXT_Y, 160U - RATE_TEXT_X, 16U, 16, (uint8_t *)s);
 }
 
-static void show_usb_state(uint8_t configured)
+#define DISPLAY_TIMEOUT_MS 120000U
+#define DISPLAY_BRIGHTNESS 80U
+
+static void display_redraw(void)
 {
+  uint32_t b;
+
+  LCD_ClearArea(0, 0, 160U, HEADER_H);
   POINT_COLOR = WHITE;
   BACK_COLOR  = BLACK;
-  LCD_ClearArea(4, HEADER_TEXT_Y, RATE_TEXT_X - 4, 16U);
-  LCD_ShowString(4, HEADER_TEXT_Y, RATE_TEXT_X - 4, 16U, 16,
-                 (uint8_t *)(configured ? "USB" : "No USB"));
+  LCD_ShowString(4, HEADER_TEXT_Y, RATE_TEXT_X - 4, 16U, 16, (uint8_t *)"STM32H7 DAC");
+  show_rate(audio_freq_hz);
+  LCD_ClearArea(0, SPECTRUM_Y, 160U, SPECTRUM_H);
+  for (b = 0; b < SPECTRUM_BARS; b++)
+  {
+    LCD_FillRect((uint16_t)(b * BAR_PITCH + 2U),
+                 (uint16_t)(SPECTRUM_Y + SPECTRUM_H - 1U), BAR_WIDTH, 1U, GREEN);
+  }
 }
 
 /* USER CODE END 0 */
@@ -153,19 +165,11 @@ int main(void)
   /* USER CODE BEGIN 2 */
   board_led_init();
   LCD_Init();
+  display_redraw();
 
-  LCD_ClearArea(0, 0, 160U, HEADER_H);
-  show_usb_state(0);
-  show_rate(audio_freq_hz);
-  LCD_ClearArea(0, SPECTRUM_Y, 160U, SPECTRUM_H);
-  {
-    uint32_t b;
-    for (b = 0; b < SPECTRUM_BARS; b++)
-    {
-      LCD_FillRect((uint16_t)(b * BAR_PITCH + 2U),
-                   (uint16_t)(SPECTRUM_Y + SPECTRUM_H - 1U), BAR_WIDTH, 1U, GREEN);
-    }
-  }
+  uint32_t display_sound_last = audio_sound_frames;
+  uint32_t display_sound_tick = HAL_GetTick();
+  uint8_t  display_on = 1U;
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -175,22 +179,40 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-    uint8_t usb_state = hUsbDeviceHS.dev_state;
-    static uint8_t  usb_state_last = 0xFFU;
     static uint32_t rate_last = 0U;
 
-    if (usb_state != usb_state_last)
+    uint32_t now = HAL_GetTick();
+    uint32_t sound_frames = audio_sound_frames;
+
+    if (sound_frames != display_sound_last)
     {
-      usb_state_last = usb_state;
-      show_usb_state(usb_state == USBD_STATE_CONFIGURED);
+      display_sound_last = sound_frames;
+      display_sound_tick = now;
+
+      if (display_on == 0U)
+      {
+        display_on = 1U;
+        LCD_SetBrightness(DISPLAY_BRIGHTNESS);
+        display_redraw();
+        rate_last = audio_freq_hz;
+      }
+    }
+    else if ((display_on != 0U) && ((now - display_sound_tick) >= DISPLAY_TIMEOUT_MS))
+    {
+      display_on = 0U;
+      LCD_SetBrightness(0U);
     }
 
     if (audio_freq_hz != rate_last)
     {
       rate_last = audio_freq_hz;
-      show_rate(audio_freq_hz);
+      if (display_on != 0U)
+      {
+        show_rate(audio_freq_hz);
+      }
     }
 
+    if (display_on != 0U)
     {
       float bars[SPECTRUM_BARS];
       if (AudioDSP_Spectrum(bars, SPECTRUM_BARS) != 0U)
@@ -208,21 +230,23 @@ int main(void)
           LCD_FillRect(x, (uint16_t)(SPECTRUM_Y + SPECTRUM_H - 1U), BAR_WIDTH, 1U, GREEN);
         }
       }
+
+#ifdef AUDIO_DEBUG
+      {
+        char dbg[24];
+
+        sprintf(dbg, "R:%-5lu F:%-4lu   ", (unsigned long)audio_dbg_freq,
+                (unsigned long)audio_dbg_writable_samples);
+        LCD_ShowString(4, 42, 152, 16, 16, (uint8_t *)dbg);
+
+        sprintf(dbg, "Drop:%-6lu   ", (unsigned long)audio_dbg_drop_count);
+        LCD_ShowString(4, 58, 152, 16, 16, (uint8_t *)dbg);
+      }
+#endif
     }
 
 #ifdef AUDIO_DEBUG
-    {
-      char dbg[24];
-
-      sprintf(dbg, "R:%-5lu F:%-4lu   ", (unsigned long)audio_dbg_freq,
-              (unsigned long)audio_dbg_writable_samples);
-      LCD_ShowString(4, 42, 152, 16, 16, (uint8_t *)dbg);
-
-      sprintf(dbg, "Drop:%-6lu   ", (unsigned long)audio_dbg_drop_count);
-      LCD_ShowString(4, 58, 152, 16, 16, (uint8_t *)dbg);
-
-      board_led_set(audio_dbg_danger ? 1U : 0U);
-    }
+    board_led_set(audio_dbg_danger ? 1U : 0U);
 #else
     board_led_set(0U);
 #endif
@@ -586,23 +610,16 @@ void MPU_Config(void)
 
   HAL_MPU_ConfigRegion(&MPU_InitStruct);
 
-  /* Audio ring buffer region: RAM_D2 (0x30000000, 32 KB) holds the SAI1 DMA
-     buffer (`.audio_buf` linker section). It is read by DMA1_Stream0 and
-     written by the CPU in the USB DataOut ISR, so it must be non-cacheable. */
-  MPU_InitStruct.Enable = MPU_REGION_ENABLE;
+  /** Initializes and configures the Region and the memory to be protected
+  */
   MPU_InitStruct.Number = MPU_REGION_NUMBER1;
-  MPU_InitStruct.BaseAddress = 0x30000000U;
+  MPU_InitStruct.BaseAddress = 0x30000000;
   MPU_InitStruct.Size = MPU_REGION_SIZE_32KB;
-  MPU_InitStruct.SubRegionDisable = 0x00;
+  MPU_InitStruct.SubRegionDisable = 0x0;
   MPU_InitStruct.TypeExtField = MPU_TEX_LEVEL1;
   MPU_InitStruct.AccessPermission = MPU_REGION_FULL_ACCESS;
-  MPU_InitStruct.DisableExec = MPU_INSTRUCTION_ACCESS_DISABLE;
-  MPU_InitStruct.IsShareable = MPU_ACCESS_SHAREABLE;
-  MPU_InitStruct.IsCacheable = MPU_ACCESS_NOT_CACHEABLE;
-  MPU_InitStruct.IsBufferable = MPU_ACCESS_NOT_BUFFERABLE;
 
   HAL_MPU_ConfigRegion(&MPU_InitStruct);
-
   /* Enables the MPU */
   HAL_MPU_Enable(MPU_PRIVILEGED_DEFAULT);
 

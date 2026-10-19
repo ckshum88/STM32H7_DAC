@@ -235,6 +235,10 @@ extern USBD_ClassTypeDef USBD_AUDIO;
 /* Current audio sample rate (Hz). Exposed for the status display; updated on
    init and whenever the host switches rate. */
 extern volatile uint32_t audio_freq_hz;
+
+/* Monotonic count of non-zero audio frames received from USB. Used by the
+   display timeout; it stops changing during silence or when no packets arrive. */
+extern volatile uint32_t audio_sound_frames;
 /**
   * @}
   */

@@ -340,6 +340,7 @@ volatile uint32_t fb_value = AUDIO_FB_DEFAULT;
    init and whenever the host switches rate. */
 volatile uint32_t audio_freq_hz = USBD_AUDIO_FREQ_DEFAULT;
 volatile uint32_t audio_buf_writable_samples_last = AUDIO_BUF_WORDS / 4U;
+volatile uint32_t audio_sound_frames = 0U;
 
 volatile uint8_t fb_data[3] = {
   (uint8_t)((AUDIO_FB_DEFAULT >> 8) & 0x000000FFU),
@@ -951,6 +952,10 @@ static uint8_t USBD_AUDIO_DataOut(USBD_HandleTypeDef *pdev, uint8_t epnum)
       uint8_t *p = &tmpbuf[i * 6U];
       int32_t l = (int32_t)(((uint32_t)p[2] << 24) | ((uint32_t)p[1] << 16) | ((uint32_t)p[0] << 8)) >> 8;
       int32_t r = (int32_t)(((uint32_t)p[5] << 24) | ((uint32_t)p[4] << 16) | ((uint32_t)p[3] << 8)) >> 8;
+      if ((l != 0) || (r != 0))
+      {
+        audio_sound_frames++;
+      }
       dspbuf[2U * i]     = (float)l * AUDIO_FLOAT_SCALE_INV;
       dspbuf[2U * i + 1U] = (float)r * AUDIO_FLOAT_SCALE_INV;
     }
