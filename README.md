@@ -2,6 +2,8 @@
 
 A USB Audio Class 1 (UAC1) DAC built on a WeAct **STM32H723VGT6** board.
 
+![STM32H7 DAC](Images/STM32H7_DAC.jpg)
+
 ## Features
 
 * USB Full Speed Audio Class 1 device — no driver installation (Windows / macOS / Linux)
@@ -127,6 +129,8 @@ against a concurrent rate-change `AudioDSP_Init()`).
 
 ## Spectrum display
 
+![Spectrum display](Images/Spectrum.jpg)
+
 The 160×80 ST7735 shows:
 
 * **top 20 px** — `STM32H7 DAC` and the active rate (`44.1K` / `48K` / `96K`) as white
@@ -159,6 +163,8 @@ rate. Bin `k` corresponds to `k · fs / 512`; band `b ≥ 1` covers bins `[2^b, 
 
 ## 3-band EQ
 
+![3-band EQ](Images/EQ.jpg)
+
 A mechanical rotary encoder (TIM2 quadrature mode, PA0 = TI1 / PA1 = TI2) with a
 push button (PA2, active-low) controls a 3-band EQ:
 
@@ -170,9 +176,11 @@ applied to the audio: low-shelf 200 Hz, peaking 1 kHz (Q 0.707), high-shelf 4 kH
 recomputed for the active sample rate. Gains persist across sample-rate changes but not
 across power cycles.
 
-The encoder input is implemented in `Bsp/bsp_encoder.c`. Polarity and sensitivity are
-compile-time tunables in `Bsp/bsp_encoder.h` (`BSP_ENC_DIR_SIGN`,
-`BSP_ENC_COUNTS_PER_DETENT`, `BSP_ENC_BUTTON_ACTIVE_LOW`).
+TIM2 and its GPIOs are configured in the CubeMX project (`.ioc`); the generated
+`MX_TIM2_Init()` sets up the encoder interface and `Bsp/bsp_encoder.c` starts it and
+handles debouncing. Polarity and sensitivity are compile-time tunables in
+`Bsp/bsp_encoder.h` (`BSP_ENC_DIR_SIGN`, `BSP_ENC_COUNTS_PER_DETENT`,
+`BSP_ENC_BUTTON_ACTIVE_LOW`).
 
 ## Known limitations
 

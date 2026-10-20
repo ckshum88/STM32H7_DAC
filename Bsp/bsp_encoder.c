@@ -1,12 +1,9 @@
 #include "bsp_encoder.h"
 #include "main.h"
 
-#define ENC_SW_Pin        GPIO_PIN_2
-#define ENC_SW_GPIO_Port  GPIOA
-
 #define ENC_BTN_DEBOUNCE_SAMPLES 2U
 
-static TIM_HandleTypeDef htim2;
+extern TIM_HandleTypeDef htim2;
 
 static uint32_t enc_last     = 0U;
 static int32_t  enc_residual = 0;
@@ -14,39 +11,6 @@ static int32_t  enc_residual = 0;
 static uint8_t  btn_stable      = 0U;   /* debounced state, 1 = pressed */
 static uint8_t  btn_prev_stable = 0U;
 static uint8_t  btn_count       = 0U;
-
-/**
-  * @brief  Low-level init for TIM2 encoder mode: clocks and PA0/PA1/P2 GPIO.
-  *         Overrides the weak HAL callback so no CubemxM MSP entry is required.
-  */
-void HAL_TIM_Encoder_MspInit(TIM_HandleTypeDef *htim)
-{
-  GPIO_InitTypeDef gpio = {0};
-
-  if (htim->Instance != TIM2)
-  {
-    return;
-  }
-
-  __HAL_RCC_TIM2_CLK_ENABLE();
-  __HAL_RCC_GPIOA_CLK_ENABLE();
-
-  /* PA0 = TIM2_CH1 (TI1), PA1 = TIM2_CH2 (TI2). */
-  gpio.Pin       = GPIO_PIN_0 | GPIO_PIN_1;
-  gpio.Mode      = GPIO_MODE_AF_PP;
-  gpio.Pull      = GPIO_PULLUP;
-  gpio.Speed     = GPIO_SPEED_FREQ_HIGH;
-  gpio.Alternate = GPIO_AF1_TIM2;
-  HAL_GPIO_Init(GPIOA, &gpio);
-
-  /* PA2 = encoder push button (external pull-up). */
-  gpio.Pin       = ENC_SW_Pin;
-  gpio.Mode      = GPIO_MODE_INPUT;
-  gpio.Pull      = GPIO_PULLUP;
-  gpio.Speed     = GPIO_SPEED_FREQ_LOW;
-  gpio.Alternate = 0U;
-  HAL_GPIO_Init(ENC_SW_GPIO_Port, &gpio);
-}
 
 static uint8_t enc_button_raw(void)
 {
@@ -61,30 +25,6 @@ static uint8_t enc_button_raw(void)
 
 void BSP_ENC_Init(void)
 {
-  TIM_Encoder_InitTypeDef sConfig = {0};
-
-  htim2.Instance               = TIM2;
-  htim2.Init.Prescaler         = 0U;
-  htim2.Init.CounterMode       = TIM_COUNTERMODE_UP;
-  htim2.Init.Period            = 0xFFFFFFFFU;
-  htim2.Init.ClockDivision     = TIM_CLOCKDIVISION_DIV1;
-  htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
-  htim2.Init.RepetitionCounter = 0U;
-
-  sConfig.EncoderMode  = TIM_ENCODERMODE_TI12;
-  sConfig.IC1Polarity  = TIM_ICPOLARITY_RISING;
-  sConfig.IC1Selection = TIM_ICSELECTION_DIRECTTI;
-  sConfig.IC1Prescaler = TIM_ICPSC_DIV1;
-  sConfig.IC1Filter    = 0x0FU;
-  sConfig.IC2Polarity  = TIM_ICPOLARITY_RISING;
-  sConfig.IC2Selection = TIM_ICSELECTION_DIRECTTI;
-  sConfig.IC2Prescaler = TIM_ICPSC_DIV1;
-  sConfig.IC2Filter    = 0x0FU;
-
-  if (HAL_TIM_Encoder_Init(&htim2, &sConfig) != HAL_OK)
-  {
-    Error_Handler();
-  }
   if (HAL_TIM_Encoder_Start(&htim2, TIM_CHANNEL_ALL) != HAL_OK)
   {
     Error_Handler();
