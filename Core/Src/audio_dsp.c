@@ -25,6 +25,138 @@ static uint16_t rev[DSP_FFT_N];
 static float fft_re[DSP_FFT_N];
 static float fft_im[DSP_FFT_N];
 
+/* ------------------------------------------------------------------------- */
+/* 3-band EQ: RBJ cookbook biquads (low-shelf, peaking, high-shelf).         */
+/* ------------------------------------------------------------------------- */
+
+#define DSP_EQ_BANDS         3U
+#define DSP_EQ_LOW_SHELF_HZ  200.0f
+#define DSP_EQ_MID_HZ        1000.0f
+#define DSP_EQ_MID_Q         0.707f
+#define DSP_EQ_HIGH_SHELF_HZ 4000.0f
+
+typedef struct
+{
+  float b0, b1, b2, a1, a2;
+} dsp_biquad_t;
+
+typedef struct
+{
+  float z1, z2;
+} dsp_biquad_state_t;
+
+static dsp_biquad_t       eq_coef[DSP_EQ_BANDS];
+static dsp_biquad_state_t eq_state[2][DSP_EQ_BANDS];
+static int8_t             eq_gain_db[DSP_EQ_BANDS] = {0, 0, 0};
+static float              eq_fs = 48000.0f;
+
+/**
+  * @brief  Compute one RBJ biquad's normalised coefficients for a given rate
+  *         and band gain (dB).
+  */
+static void eq_compute_band(uint8_t band, float fs, int8_t db, dsp_biquad_t *out)
+{
+  const float sqrt2 = 1.4142135623730951f;
+  float w0, cw, sw, A, sqrtA, alpha;
+  float b0, b1, b2, a0, a1, a2;
+  float f0;
+
+  A     = powf(10.0f, (float)db / 40.0f);
+  sqrtA = sqrtf(A);
+
+  f0 = (band == 0U) ? DSP_EQ_LOW_SHELF_HZ :
+       (band == 1U) ? DSP_EQ_MID_HZ : DSP_EQ_HIGH_SHELF_HZ;
+  w0 = 2.0f * (float)M_PI * f0 / fs;
+  cw = cosf(w0);
+  sw = sinf(w0);
+
+  if (band == 1U)
+  {
+    /* Peaking EQ. */
+    alpha = sw / (2.0f * DSP_EQ_MID_Q);
+    b0 =  1.0f + (alpha * A);
+    b1 = -2.0f * cw;
+    b2 =  1.0f - (alpha * A);
+    a0 =  1.0f + (alpha / A);
+    a1 = -2.0f * cw;
+    a2 =  1.0f - (alpha / A);
+  }
+  else
+  {
+    /* Shelf (slope S = 1). */
+    float twoSqrtAalpha;
+
+    alpha = (sw * 0.5f) * sqrt2;
+    twoSqrtAalpha = 2.0f * sqrtA * alpha;
+
+    if (band == 0U)
+    {
+      /* Low shelf. */
+      b0 =      A * ((A + 1.0f) - (A - 1.0f) * cw + twoSqrtAalpha);
+      b1 =  2.0f * A * ((A - 1.0f) - (A + 1.0f) * cw);
+      b2 =      A * ((A + 1.0f) - (A - 1.0f) * cw - twoSqrtAalpha);
+      a0 =           (A + 1.0f) + (A - 1.0f) * cw + twoSqrtAalpha;
+      a1 = -2.0f *  ((A - 1.0f) + (A + 1.0f) * cw);
+      a2 =           (A + 1.0f) + (A - 1.0f) * cw - twoSqrtAalpha;
+    }
+    else
+    {
+      /* High shelf. */
+      b0 =      A * ((A + 1.0f) + (A - 1.0f) * cw + twoSqrtAalpha);
+      b1 = -2.0f * A * ((A - 1.0f) + (A + 1.0f) * cw);
+      b2 =      A * ((A + 1.0f) + (A - 1.0f) * cw - twoSqrtAalpha);
+      a0 =           (A + 1.0f) - (A - 1.0f) * cw + twoSqrtAalpha;
+      a1 =  2.0f *  ((A - 1.0f) - (A + 1.0f) * cw);
+      a2 =           (A + 1.0f) - (A - 1.0f) * cw - twoSqrtAalpha;
+    }
+  }
+
+  out->b0 = b0 / a0;
+  out->b1 = b1 / a0;
+  out->b2 = b2 / a0;
+  out->a1 = a1 / a0;
+  out->a2 = a2 / a0;
+}
+
+/**
+  * @brief  Set an EQ band gain. The sample-rate read and coefficient commit
+  *         happen under one critical section so a concurrent rate change
+  *         (AudioDSP_Init, USB control path) cannot interleave.
+  */
+void AudioDSP_SetEqGainDb(uint8_t band, int8_t db)
+{
+  dsp_biquad_t c;
+  uint32_t primask;
+
+  if (band >= DSP_EQ_BANDS)
+  {
+    return;
+  }
+  if (db < (int8_t)AUDIO_DSP_EQ_DB_MIN) db = (int8_t)AUDIO_DSP_EQ_DB_MIN;
+  if (db > (int8_t)AUDIO_DSP_EQ_DB_MAX) db = (int8_t)AUDIO_DSP_EQ_DB_MAX;
+
+  primask = __get_PRIMASK();
+  __disable_irq();
+
+  eq_gain_db[band] = db;
+  eq_compute_band(band, eq_fs, db, &c);
+  eq_coef[band] = c;
+
+  __set_PRIMASK(primask);
+}
+
+/**
+  * @brief  Read back an EQ band gain (dB).
+  */
+int8_t AudioDSP_GetEqGainDb(uint8_t band)
+{
+  if (band >= DSP_EQ_BANDS)
+  {
+    return 0;
+  }
+  return eq_gain_db[band];
+}
+
 /**
   * @brief  Initialize the DSP stage: rebuild the analysis window and reset
   *         the display tap. Called on startup and on every sample-rate change.
@@ -32,13 +164,15 @@ static float fft_im[DSP_FFT_N];
 void AudioDSP_Init(uint32_t sample_rate)
 {
   uint32_t i;
+  uint32_t ch;
+  uint32_t b;
   uint32_t n = DSP_FFT_N;
-
-  (void)sample_rate;
 
   tap_active = 0U;
   tap_fill   = 0U;
   tap_ready  = 0U;
+
+  eq_fs = (float)sample_rate;
 
   /* Hann window. */
   for (i = 0; i < n; i++)
@@ -50,14 +184,30 @@ void AudioDSP_Init(uint32_t sample_rate)
   for (i = 0; i < n; i++)
   {
     uint32_t r = 0U;
-    uint32_t b = i;
+    uint32_t b2 = i;
     uint32_t j;
     for (j = 0; j < 9U; j++)
     {
-      r = (r << 1) | (b & 1U);
-      b >>= 1;
+      r = (r << 1) | (b2 & 1U);
+      b2 >>= 1;
     }
     rev[i] = (uint16_t)r;
+  }
+
+  /* EQ: rebuild coefficients for the new rate from the persisted gains and
+     clear the per-channel filter state. Runs in the USB control path, which is
+     already interrupt context, so a plain store is safe. */
+  for (b = 0U; b < DSP_EQ_BANDS; b++)
+  {
+    eq_compute_band((uint8_t)b, eq_fs, eq_gain_db[b], &eq_coef[b]);
+  }
+  for (ch = 0U; ch < 2U; ch++)
+  {
+    for (b = 0U; b < DSP_EQ_BANDS; b++)
+    {
+      eq_state[ch][b].z1 = 0.0f;
+      eq_state[ch][b].z2 = 0.0f;
+    }
   }
 }
 
@@ -68,9 +218,30 @@ void AudioDSP_Init(uint32_t sample_rate)
 void AudioDSP_ProcessBlock(float *pcm, uint32_t nframes)
 {
   uint32_t i;
+  uint32_t ch;
+  uint32_t b;
 
   for (i = 0; i < nframes; i++)
   {
+    /* 3-band EQ per channel (transposed direct-form II biquads). */
+    for (ch = 0U; ch < 2U; ch++)
+    {
+      float x = pcm[2U * i + ch];
+
+      for (b = 0U; b < DSP_EQ_BANDS; b++)
+      {
+        dsp_biquad_state_t *s = &eq_state[ch][b];
+        const dsp_biquad_t *c = &eq_coef[b];
+        float y = (c->b0 * x) + s->z1;
+        s->z1 = (c->b1 * x) - (c->a1 * y) + s->z2;
+        s->z2 = (c->b2 * x) - (c->a2 * y);
+        x = y;
+      }
+
+      pcm[2U * i + ch] = x;
+    }
+
+    /* Spectrum tap: mono downmix of the EQ'd samples (post-EQ). */
     if (tap_ready == 0U)
     {
       tap[tap_active][tap_fill++] = 0.5f * (pcm[2U * i] + pcm[2U * i + 1U]);

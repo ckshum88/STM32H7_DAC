@@ -74,6 +74,7 @@ Core/Src/system_stm32h7xx.c \
 Core/Src/audio_dsp.c \
 Bsp/board.c \
 Bsp/bsp_audio.c \
+Bsp/bsp_encoder.c \
 Bsp/ST7735/lcd.c \
 Bsp/ST7735/st7735.c \
 Bsp/ST7735/st7735_reg.c \

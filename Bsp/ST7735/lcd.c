@@ -232,6 +232,35 @@ void LCD_ClearArea(uint16_t x, uint16_t y, uint16_t w, uint16_t h)
 	ST7735_FillRect(&st7735_pObj, x, y, w, h, BLACK);
 }
 
+void LCD_SetPixel(uint16_t x, uint16_t y, uint16_t color)
+{
+	ST7735_SetPixel(&st7735_pObj, x, y, color);
+}
+
+//Bresenham line, used by the EQ level graph
+void LCD_DrawLine(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1, uint16_t color)
+{
+	int32_t dx = (x1 > x0) ? (int32_t)(x1 - x0) : (int32_t)(x0 - x1);
+	int32_t sx = (x0 < x1) ? 1 : -1;
+	int32_t dy = -(y1 > y0 ? (int32_t)(y1 - y0) : (int32_t)(y0 - y1));
+	int32_t sy = (y0 < y1) ? 1 : -1;
+	int32_t err = dx + dy;
+
+	for (;;)
+	{
+		LCD_FillRect(x0, y0, 1U, 1U, color);
+		if ((x0 == x1) && (y0 == y1))
+		{
+			break;
+		}
+		{
+			int32_t e2 = 2 * err;
+			if (e2 >= dy) { err += dy; x0 = (uint16_t)((int32_t)x0 + sx); }
+			if (e2 <= dx) { err += dx; y0 = (uint16_t)((int32_t)y0 + sy); }
+		}
+	}
+}
+
 static int32_t lcd_init(void)
 {
 	int32_t result = ST7735_OK;

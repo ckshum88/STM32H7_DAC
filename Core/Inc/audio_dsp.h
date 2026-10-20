@@ -7,11 +7,32 @@ extern "C" {
 
 #include <stdint.h>
 
+/* 3-band equalizer: Low (low-shelf), Mid (peaking), High (high-shelf). */
+#define AUDIO_DSP_EQ_BANDS  3U
+#define AUDIO_DSP_EQ_DB_MIN (-15)
+#define AUDIO_DSP_EQ_DB_MAX ( 15)
+
 /**
   * @brief  Initialize the DSP stage.
   * @param  sample_rate: audio sample rate in Hz
   */
 void AudioDSP_Init(uint32_t sample_rate);
+
+/**
+  * @brief  Set the gain of one EQ band.
+  *         Safe to call from the main loop while audio is streaming; the
+  *         coefficient update is atomic with respect to the USB audio ISR.
+  * @param  band: 0 = Low, 1 = Mid, 2 = High
+  * @param  db:   gain in dB, clamped to [-15, +15]
+  */
+void AudioDSP_SetEqGainDb(uint8_t band, int8_t db);
+
+/**
+  * @brief  Read back the current gain of one EQ band.
+  * @param  band: 0 = Low, 1 = Mid, 2 = High
+  * @retval gain in dB in [-15, +15]
+  */
+int8_t AudioDSP_GetEqGainDb(uint8_t band);
 
 /**
   * @brief  Process a block of interleaved stereo samples in float32.

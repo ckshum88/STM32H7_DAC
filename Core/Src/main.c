@@ -23,6 +23,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "board.h"
+#include "bsp_encoder.h"
 #include "lcd.h"
 #include "usbd_audio.h"
 #include "audio_dsp.h"
@@ -75,7 +76,7 @@ static void MX_TIM1_Init(void);
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 
-/* Status header (top 20 px) + spectrum (lower 60 px) geometry. */
+/* Status header (top 20 px) + spectrum/EQ area (lower 60 px) geometry. */
 #define HEADER_H     20U
 #define HEADER_TEXT_Y 2U
 #define RATE_TEXT_X   116U
@@ -105,20 +106,106 @@ static void show_rate(uint32_t freq)
 #define DISPLAY_TIMEOUT_MS 120000U
 #define DISPLAY_BRIGHTNESS 80U
 
-static void display_redraw(void)
+/* ------------------------------------------------------------------------- */
+/* Rotary-encoder UI: spectrum view + 3-band EQ adjust view.                 */
+/* ------------------------------------------------------------------------- */
+
+typedef enum
+{
+  UI_SPECTRUM = 0,
+  UI_EQ_LOW,
+  UI_EQ_MID,
+  UI_EQ_HIGH,
+  UI_MODE_COUNT
+} ui_mode_t;
+
+static ui_mode_t ui_mode = UI_SPECTRUM;
+static uint8_t   ui_needs_redraw = 0U;
+
+/* EQ graph geometry: 3 markers over the lower 60 px area, center = 0 dB. */
+#define EQ_MARKER_HALF 4
+#define EQ_CENTER_Y    (SPECTRUM_Y + (SPECTRUM_H / 2U))
+#define EQ_SCALE       1.6f
+static const uint16_t eq_marker_x[AUDIO_DSP_EQ_BANDS] = { 30U, 80U, 130U };
+
+static uint16_t eq_y_for_gain(int8_t db)
+{
+  int32_t y = (int32_t)EQ_CENTER_Y - (int32_t)((float)db * EQ_SCALE);
+  return (uint16_t)y;
+}
+
+static void eq_draw_marker(uint8_t band)
+{
+  uint16_t x = eq_marker_x[band];
+  uint16_t y = eq_y_for_gain(AudioDSP_GetEqGainDb(band));
+
+  if (ui_mode == (ui_mode_t)((uint32_t)UI_EQ_LOW + band))
+  {
+    /* Selected band: solid highlighted square. */
+    LCD_FillRect((uint16_t)(x - EQ_MARKER_HALF), (uint16_t)(y - EQ_MARKER_HALF),
+                 (uint16_t)(EQ_MARKER_HALF * 2 + 1), (uint16_t)(EQ_MARKER_HALF * 2 + 1),
+                 YELLOW);
+  }
+  else
+  {
+    /* Other bands: outlined square (the line passes through the center). */
+    LCD_FillRect((uint16_t)(x - 3U), (uint16_t)(y - 3U), 7U, 7U, WHITE);
+    LCD_FillRect((uint16_t)(x - 2U), (uint16_t)(y - 2U), 5U, 5U, BLACK);
+  }
+}
+
+static void eq_draw_graph(void)
+{
+  uint8_t band;
+
+  LCD_ClearArea(0, SPECTRUM_Y, 160U, SPECTRUM_H);
+
+  /* 0 dB reference line. */
+  LCD_FillRect(4U, EQ_CENTER_Y, 152U, 1U, GRAY);
+
+  /* Connect the three markers. */
+  for (band = 1U; band < AUDIO_DSP_EQ_BANDS; band++)
+  {
+    LCD_DrawLine(eq_marker_x[band - 1U],
+                 eq_y_for_gain(AudioDSP_GetEqGainDb((uint8_t)(band - 1U))),
+                 eq_marker_x[band],
+                 eq_y_for_gain(AudioDSP_GetEqGainDb(band)),
+                 GREEN);
+  }
+
+  for (band = 0U; band < AUDIO_DSP_EQ_BANDS; band++)
+  {
+    eq_draw_marker(band);
+  }
+}
+
+static void spectrum_draw_baseline(void)
 {
   uint32_t b;
 
-  LCD_ClearArea(0, 0, 160U, HEADER_H);
-  POINT_COLOR = WHITE;
-  BACK_COLOR  = BLACK;
-  LCD_ShowString(4, HEADER_TEXT_Y, RATE_TEXT_X - 4, 16U, 16, (uint8_t *)"STM32H7 DAC");
-  show_rate(audio_freq_hz);
   LCD_ClearArea(0, SPECTRUM_Y, 160U, SPECTRUM_H);
   for (b = 0; b < SPECTRUM_BARS; b++)
   {
     LCD_FillRect((uint16_t)(b * BAR_PITCH + 2U),
                  (uint16_t)(SPECTRUM_Y + SPECTRUM_H - 1U), BAR_WIDTH, 1U, GREEN);
+  }
+}
+
+static void display_redraw(void)
+{
+  LCD_ClearArea(0, 0, 160U, HEADER_H);
+  POINT_COLOR = WHITE;
+  BACK_COLOR  = BLACK;
+  LCD_ShowString(4, HEADER_TEXT_Y, RATE_TEXT_X - 4, 16U, 16, (uint8_t *)"STM32H7 DAC");
+  show_rate(audio_freq_hz);
+
+  if (ui_mode == UI_SPECTRUM)
+  {
+    spectrum_draw_baseline();
+  }
+  else
+  {
+    eq_draw_graph();
   }
 }
 
@@ -164,6 +251,7 @@ int main(void)
   MX_USB_DEVICE_Init();
   /* USER CODE BEGIN 2 */
   board_led_init();
+  BSP_ENC_Init();
   LCD_Init();
   display_redraw();
 
@@ -183,6 +271,37 @@ int main(void)
 
     uint32_t now = HAL_GetTick();
     uint32_t sound_frames = audio_sound_frames;
+    uint8_t  activity = 0U;
+
+    /* Poll the rotary encoder + button every loop, even when the backlight is
+       off, so user input can also wake the display. */
+    {
+      int32_t steps = BSP_ENC_GetSteps();
+      uint8_t pressed = BSP_ENC_ButtonEvent();
+
+      if ((steps != 0) || (pressed != 0U))
+      {
+        activity = 1U;
+      }
+
+      if (pressed != 0U)
+      {
+        ui_mode = (ui_mode_t)(((uint32_t)ui_mode + 1U) % (uint32_t)UI_MODE_COUNT);
+        ui_needs_redraw = 1U;
+      }
+
+      if ((steps != 0) && (ui_mode != UI_SPECTRUM))
+      {
+        uint8_t band = (uint8_t)((uint32_t)ui_mode - (uint32_t)UI_EQ_LOW);
+        int32_t g = (int32_t)AudioDSP_GetEqGainDb(band) + steps;
+
+        if (g < (int32_t)AUDIO_DSP_EQ_DB_MIN) { g = AUDIO_DSP_EQ_DB_MIN; }
+        if (g > (int32_t)AUDIO_DSP_EQ_DB_MAX) { g = AUDIO_DSP_EQ_DB_MAX; }
+
+        AudioDSP_SetEqGainDb(band, (int8_t)g);
+        ui_needs_redraw = 1U;
+      }
+    }
 
     if (sound_frames != display_sound_last)
     {
@@ -194,6 +313,7 @@ int main(void)
         display_on = 1U;
         LCD_SetBrightness(DISPLAY_BRIGHTNESS);
         display_redraw();
+        ui_needs_redraw = 0U;
         rate_last = audio_freq_hz;
       }
     }
@@ -201,6 +321,21 @@ int main(void)
     {
       display_on = 0U;
       LCD_SetBrightness(0U);
+    }
+
+    /* User input counts as activity: keep the display awake. */
+    if (activity != 0U)
+    {
+      display_sound_tick = now;
+
+      if (display_on == 0U)
+      {
+        display_on = 1U;
+        LCD_SetBrightness(DISPLAY_BRIGHTNESS);
+        display_redraw();
+        ui_needs_redraw = 0U;
+        rate_last = audio_freq_hz;
+      }
     }
 
     if (audio_freq_hz != rate_last)
@@ -214,35 +349,51 @@ int main(void)
 
     if (display_on != 0U)
     {
-      float bars[SPECTRUM_BARS];
-      if (AudioDSP_Spectrum(bars, SPECTRUM_BARS) != 0U)
+      if (ui_mode == UI_SPECTRUM)
       {
-        uint32_t b;
-        LCD_ClearArea(0, SPECTRUM_Y, 160U, SPECTRUM_H);
-        for (b = 0; b < SPECTRUM_BARS; b++)
+        if (ui_needs_redraw != 0U)
         {
-          uint16_t h = (uint16_t)(bars[b] * (float)SPECTRUM_H);
-          uint16_t x = (uint16_t)(b * BAR_PITCH + 2U);
-          if (h > 0U)
-          {
-            LCD_FillRect(x, (uint16_t)(SPECTRUM_Y + SPECTRUM_H - h), BAR_WIDTH, h, GREEN);
-          }
-          LCD_FillRect(x, (uint16_t)(SPECTRUM_Y + SPECTRUM_H - 1U), BAR_WIDTH, 1U, GREEN);
+          spectrum_draw_baseline();
+          ui_needs_redraw = 0U;
         }
-      }
+
+        {
+          float bars[SPECTRUM_BARS];
+          if (AudioDSP_Spectrum(bars, SPECTRUM_BARS) != 0U)
+          {
+            uint32_t b;
+            LCD_ClearArea(0, SPECTRUM_Y, 160U, SPECTRUM_H);
+            for (b = 0; b < SPECTRUM_BARS; b++)
+            {
+              uint16_t h = (uint16_t)(bars[b] * (float)SPECTRUM_H);
+              uint16_t x = (uint16_t)(b * BAR_PITCH + 2U);
+              if (h > 0U)
+              {
+                LCD_FillRect(x, (uint16_t)(SPECTRUM_Y + SPECTRUM_H - h), BAR_WIDTH, h, GREEN);
+              }
+              LCD_FillRect(x, (uint16_t)(SPECTRUM_Y + SPECTRUM_H - 1U), BAR_WIDTH, 1U, GREEN);
+            }
+          }
+        }
 
 #ifdef AUDIO_DEBUG
-      {
-        char dbg[24];
+        {
+          char dbg[24];
 
-        sprintf(dbg, "R:%-5lu F:%-4lu   ", (unsigned long)audio_dbg_freq,
-                (unsigned long)audio_dbg_writable_samples);
-        LCD_ShowString(4, 42, 152, 16, 16, (uint8_t *)dbg);
+          sprintf(dbg, "R:%-5lu F:%-4lu   ", (unsigned long)audio_dbg_freq,
+                  (unsigned long)audio_dbg_writable_samples);
+          LCD_ShowString(4, 42, 152, 16, 16, (uint8_t *)dbg);
 
-        sprintf(dbg, "Drop:%-6lu   ", (unsigned long)audio_dbg_drop_count);
-        LCD_ShowString(4, 58, 152, 16, 16, (uint8_t *)dbg);
-      }
+          sprintf(dbg, "Drop:%-6lu   ", (unsigned long)audio_dbg_drop_count);
+          LCD_ShowString(4, 58, 152, 16, 16, (uint8_t *)dbg);
+        }
 #endif
+      }
+      else if (ui_needs_redraw != 0U)
+      {
+        eq_draw_graph();
+        ui_needs_redraw = 0U;
+      }
     }
 
 #ifdef AUDIO_DEBUG
